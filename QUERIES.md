@@ -479,3 +479,39 @@ Documentation reviewed 2026-10-20 UTC. Installed versions were not supplied; no 
 - [Services](https://docs.velociraptor.app/artifact_references/pages/windows.system.services/), [tasks](https://docs.velociraptor.app/artifact_references/pages/windows.system.taskscheduler/), [startup](https://docs.velociraptor.app/artifact_references/pages/windows.sys.startupitems/), [WMI](https://docs.velociraptor.app/artifact_references/pages/windows.persistence.permanentwmievents/)
 - [Arkime help](https://github.com/arkime/arkime/blob/main/viewer/vueapp/src/components/help/Help.vue), [Malcolm comparison](https://malcolm.fyi/docs/queries-cheat-sheet.html), [HTTP field definitions](https://github.com/arkime/arkime/blob/main/capture/parsers/http.c)
 - [KQL](https://www.elastic.co/docs/reference/query-languages/kql), [Winlogbeat fields](https://www.elastic.co/docs/reference/beats/winlogbeat/exported-fields-winlog), [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon), [PEStudio](https://www.winitor.com/), [Procmon](https://learn.microsoft.com/en-us/sysinternals/downloads/procmon)
+
+## Most useful queries — competition quick reference
+
+**Start here during the hour.** Pick the row that answers your next question; do not run every row. These are prioritized for the team's unidentified-malware and timeline scenario, not guaranteed detection rules.
+
+**Replace:** `LAB-WIN11` = affected host; `4242` = candidate PID; `192.0.2.10` = affected IP; `198.51.100.20` / `example.com` = candidate destination; `suspect.exe`, paths, dates, GUIDs, and hashes = case values. Set an absolute time range first. Full guidance and field alternatives are above.
+
+**Run in the right place:** Velociraptor VQL on the selected endpoint (not a normal server notebook); Arkime expressions in Sessions; ELK queries in Kibana Discover with KQL selected. Windows artifacts/logs below require Windows and the relevant collection. Every query is an example, not event-tested.
+
+| Tool | Question / use | Copyable query | Save or check |
+|---|---|---|---|
+| **Velociraptor · VQL** | Who ran it? What file/command? | `SELECT Pid, Ppid, Name, Exe, CommandLine, Username, CreateTime FROM pslist()` | Candidate PID, parent, full path, user, command, start time. Live snapshot only; narrow with `WHERE Name =~ '(?i)suspect'` if needed. |
+| **Velociraptor · VQL** | What are the exact file bytes? | `SELECT OSPath, Size, hash(path=OSPath) AS Hash FROM glob(globs='C:/Users/analyst/Downloads/suspect.exe') WHERE NOT IsDir` | Expand Hash for SHA256; preserve original path and a collected copy. Current bytes may differ from past execution. |
+| **Velociraptor · artifact/VQL** | What connections are open now? | `SELECT * FROM Artifact.Windows.Network.Netstat()` | Local/remote IPs and ports, owning PID/name, collection time. Closed historical connections will be absent. |
+| **Velociraptor · artifact/VQL** | Is a task launching it? | `SELECT * FROM Artifact.Windows.System.TaskScheduler()` | Task name, action/arguments, principal, triggers, and XML where collected. Present task does not prove it ran. |
+| **Velociraptor · artifact/VQL** | Is a service launching it? | `SELECT * FROM Artifact.Windows.System.Services()` | Actual binary/arguments, account, and configuration. Correlate installation/execution history. |
+| **Velociraptor · artifact/VQL** | Is WMI relaunching it? | `SELECT * FROM Artifact.Windows.Persistence.PermanentWMIEvents()` | Linked filter, consumer, and binding; unlinked components may be missed. |
+| **Velociraptor · artifact/VQL** | When did it run if ELK lacks history? | `SELECT * FROM Artifact.Windows.EventLogs.Evtx(EvtxGlob='C:/Windows/System32/winevt/Logs/Microsoft-Windows-Sysmon%4Operational.evtx', IDRegex='^1$', StartDate='2026-10-19T13:00:00Z', EndDate='2026-10-19T15:00:00Z')` | Replace dates and inspect candidate path/GUID/user/parent. Scope the log/time; event 1 means process creation in this Sysmon channel. |
+| **Arkime · Sessions** | What traffic belongs to this host? | `ip == 192.0.2.10` | Session IDs, first/last times, endpoints/ports; verify the IP belonged to that host then. |
+| **Arkime · Sessions** | Did it connect to this destination? | `ip.src == 192.0.2.10 && ip.dst == 198.51.100.20` | Matching tuple and occurrence interval. Correlate endpoint evidence before naming the process. |
+| **Arkime · Sessions** | What DNS did it generate? | `ip == 192.0.2.10 && protocols == dns` | Query/answer, times, session evidence. DNS does not establish a later connection. |
+| **Arkime · Sessions** | Who looked up this domain? | `host.dns == "example.com"` | Source hosts and event times; map each IP to its host at that time. |
+| **Arkime · Sessions** | Was the candidate downloaded over visible HTTP? | `ip == 192.0.2.10 && http.uri == "*suspect.exe*"` | Actual request/response and packet time where available. HTTPS can hide URI/content; a URL match is not execution proof. |
+| **Arkime · Sessions** | Were there possible remote-access connections? | `ip.src == 192.0.2.10 && port.dst == [22, 445, 3389]` | Destination hosts/time for SSH/SMB/RDP-port leads. Normal administration matches too; port alone does not prove success or compromise. |
+| **ELK · KQL** | What happened on the host? | `host.name: "LAB-WIN11"` | Sort event time; inspect actual user, process, source dataset, and raw record. |
+| **ELK · KQL** | When did a process start? | `host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: "1"` | Candidate path/hash, original time, user, ProcessGuid and parent. Narrow to the candidate; say earliest observed. |
+| **ELK · KQL** | What did this process launch or do? | `host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and (winlog.event_data.ProcessGuid: "REPLACE-GUID" or winlog.event_data.ParentProcessGuid: "REPLACE-GUID")` | Instance-linked events and children. Requires these raw GUID fields; do not join on PID alone. |
+| **ELK · KQL** | Did it create files? | `host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: "11"` | File path, creating process, occurrence time, source event. File creation is not execution. |
+| **ELK · KQL** | What DNS/connections occurred historically? | `host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: ("3" or "22")` | Process GUID, DNS/tuple, event time; match Arkime. Logging/configuration may omit these events. |
+| **ELK · KQL** | Which account logged on or failed? | `host.name: "LAB-WIN11" and winlog.channel: "Security" and winlog.event_id: ("4624" or "4625" or "4648")` | Target/subject account and domain, logon type/session, source IP. Login alone is not malware execution. |
+| **ELK · KQL** | Does the same hash appear on other hosts? | `process.hash.sha256: "REPLACE-SHA256" or file.hash.sha256: "REPLACE-SHA256"` | Other host names/times and execution context. Requires indexed hashes; file presence alone is not compromise. |
+
+**If you only have a few minutes:** host activity → process/user/path → exact hash → related network evidence → tasks/services if indicated → same indicator on other hosts. Add each supported answer to the timeline immediately.
+
+**For every useful hit:** record full occurrence time + host + observed fact + exact source/event/session/collection reference. Keep lab-run findings separate. Preserve original timestamps; unknown timezone/clock is not UTC. No results may mean a visibility gap.
+
