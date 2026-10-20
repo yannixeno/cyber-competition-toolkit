@@ -1,0 +1,26 @@
+# Keep live case material outside version control.
+# Ignore rules do not remove already tracked files or prevent forced adds.
+/evidence/
+/samples/
+/captures/
+/collections/
+/answers/
+/local-notes/
+*.pcap
+*.pcapng
+*.evtx
+*.dmp
+*.mem
+*.raw
+*.exe
+*.dll
+*.zip
+*.7z
+.env
+.env.*
+*.pem
+*.key
+client.config.yaml
+server.config.yaml
+.DS_Store
+Thumbs.db
