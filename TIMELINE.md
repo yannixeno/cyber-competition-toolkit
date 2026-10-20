@@ -2,7 +2,7 @@
 
 [Plan](README.md) · [Quick sheet](QUERIES.md)
 
-One person merges/reviews. Everyone contributes facts and evidence throughout the hour.
+One person merges/reviews. Everyone contributes facts and evidence throughout the hour. Put the competition question number in Notes so every answer leads back to its supporting events.
 
 ![Illustrative timeline: arrival, execution, persistence, and traffic need their own evidence](timeline-example.png)
 
