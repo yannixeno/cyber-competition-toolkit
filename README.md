@@ -2,7 +2,7 @@
 
 **One hour. Three files:** this guide, [QUERIES.md](QUERIES.md), and [TIMELINE.md](TIMELINE.md).
 
-Read the actual competition questions first. Use their order and requested answer format. The questions below are a simple path for an unknown-malware incident—not a prediction of the exact questions.
+Read the actual competition questions first. Use their order and requested answer format. The query reference includes Velociraptor artifacts/VQL, Arkime filters, and ELK/KQL searches under the same question headings. The questions below are a simple path for an unknown-malware incident—not a prediction of the exact questions.
 
 ![Question-by-question investigation path for the one-hour event](60-minute-plan.png)
 

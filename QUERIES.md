@@ -1,122 +1,481 @@
-# Answer the next question
+# Answer the question. Use the right query.
 
 [Plan](README.md) · [Timeline](TIMELINE.md)
 
-Set an **absolute incident time window**. Replace examples. ELK examples use **KQL in Kibana Discover**; Arkime uses its own syntax. Fields/logs vary; these queries are not event-tested.
+Keep the README open for the plan. Use this page as a technical reference: jump to the current question, choose a tool, run a targeted check, and save the evidence. Do not run every query.
+
+**Jump to:** [Who?](#1-who-was-affected) · [File?](#2-what-was-the-file) · [When?](#3-when-did-it-start) · [How?](#4-how-did-it-arrive-and-run) · [Behavior?](#5-what-did-it-do) · [Contacts?](#6-what-did-it-contact) · [Other hosts?](#7-was-anyone-else-affected) · [Evidence?](#8-can-we-prove-the-answers) · [Artifact picker](#velociraptor-artifact-picker)
+
+## Before copying
+
+- Replace example hosts, users, files, PID 4242, domains, IPs, hashes, GUIDs, and dates. Set an **absolute incident time window** first.
+- **ELK:** Kibana Discover, **KQL** selected. Examples assume ECS/Winlogbeat-style mappings. Inspect a real event first; use the actual event ID and user/path fields.
+- **Arkime:** Sessions search bar, **Arkime expressions**. Check Help → Fields and time-bounding mode. Malcolm/Zeek fields may be absent.
+- **Velociraptor:** select the correct endpoint for artifact collection. The VQL below must execute **on that endpoint**, using the provided client VQL/Shell facility or a client artifact. A normal server-side notebook can run pslist/glob/netstat against the server, not the victim. For previously collected results, use that collection's notebook-generated source query.
+- Run examples **separately**. Windows artifacts below are Windows-specific. Review installed definitions, parameters, permissions, and collection errors; do not assume current documentation matches the installed version.
+- Examples are documentation-informed, **not event-tested detections**. No results can mean missing data, wrong filters, or an offline client.
 
 ## 1. Who was affected?
 
-Start with a known host in ELK:
+### ELK: host, account, and logon context
 
 ```text
 host.name: "LAB-WIN11"
 ```
 
-Read the suspicious event's user/domain, host, source IP, time, and process—not just whoever is currently logged on. Confirm the right Velociraptor client and historical host-IP mapping.
+```text
+host.name: "LAB-WIN11" and user.name: "analyst"
+```
 
-**Save:** user + hostname + IP-at-event + event reference.
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Security" and winlog.event_id: ("4624" or "4625" or "4648")
+```
+
+Read raw target/subject username, domain, logon type/session, source IP, and process context. user.name can represent different actors depending on the pipeline. A logged-on account is not automatically the sample's user.
+
+### Velociraptor: account tied to the live process
+
+**Artifacts:** Windows.System.Pslist; Windows.Sys.Users for registry profile evidence (not logon proof or a complete directory inventory).
+
+```sql
+SELECT Pid, Ppid, Name, Exe, CommandLine, Username, CreateTime
+FROM pslist()
+WHERE Name =~ '(?i)suspect'
+```
+
+Remove WHERE if you need an initial snapshot. If it already exited, use historical events.
+
+### Arkime: identify the host behind a lead
+
+```text
+ip == 192.0.2.10
+```
+
+Map the IP to a host **at the event time**. Arkime generally cannot infer a Windows user from an IP alone.
+
+**Save:** account/domain, host/client ID, IP-at-event, and source record.
 
 ## 2. What was the file?
 
-In Velociraptor, inspect the suspicious process's **full executable path, command line, parent, user, and start time**. Acquire a file copy and record SHA-256/type/size and collection ID. Compare with historical process hashes if present.
+### Velociraptor: process, exact path, hash, and signature
 
-Minimal VQL in an **endpoint** query context:
+**Artifact:** Windows.System.Pslist. Narrow ProcessRegex, PidRegex, ExePathRegex, or CommandLineRegex where available; enrichment can cost time.
 
 ```sql
-SELECT * FROM pslist()
+SELECT * FROM Artifact.Windows.System.Pslist(
+  ProcessRegex='(?i)^suspect[.]exe$')
 ```
 
-This is a live snapshot, not history. Server context can inspect the server instead of the victim. Same filename does not mean same file; current bytes may differ from earlier execution.
+Inspect one known PID:
 
-**Save:** path + name + type + SHA-256 + evidence reference.
+```sql
+SELECT Pid, Ppid, Name, Exe, CommandLine, Username, CreateTime
+FROM pslist(pid=4242)
+```
+
+Hash/signature for one exact file:
+
+```sql
+SELECT OSPath, Size, hash(path=OSPath) AS Hash,
+       authenticode(filename=OSPath) AS Signature
+FROM glob(globs='C:/Users/analyst/Downloads/suspect.exe')
+WHERE NOT IsDir
+```
+
+Expand Hash for SHA256. No row may mean a missing/inaccessible file; inspect errors. Acquire a copy through approved VFS/file collection and preserve the flow ID. Current bytes can differ from what executed earlier. Signed does not mean benign; unsigned does not mean malware.
+
+### ELK: recorded file/process identity
+
+```text
+host.name: "LAB-WIN11" and process.name: "suspect.exe"
+```
+
+```text
+process.hash.sha256: "REPLACE-SHA256" or file.hash.sha256: "REPLACE-SHA256"
+```
+
+Inspect process.executable, command line, user, parent, and historical hash. Raw Sysmon may instead expose winlog.event_data.Image/CommandLine/Hashes. For exact paths, use the document's filter control to avoid escaping mistakes.
+
+### Arkime: possible file delivery, if HTTP is visible
+
+```text
+ip == 192.0.2.10 && http.uri == "*suspect.exe*"
+```
+
+Inspect request/response and packet evidence. HTTPS may hide the URI/content. A matching URL does not prove the file reached disk or ran.
+
+**Save:** full path, name/type/size, SHA-256, acquisition and historical references.
 
 ## 3. When did it start?
 
-ELK, if Sysmon process creation is collected:
+### ELK: first observed execution
 
 ```text
 host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: "1"
 ```
 
-Sort oldest first. Find the candidate's creation time and parent. Widen backward as needed. If only Security auditing exists, check Security / 4688. Preserve original time/zone and source event ID; use UTC only after conversion.
+Add process.name or the actual raw Image field after checking mappings. If Sysmon is absent but Security process auditing exists:
 
-**Save:** earliest observed execution + parent + timeline row + coverage limit.
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Security" and winlog.event_id: "4688"
+```
+
+Sort occurrence time ascending. Widen backward; record retention limits. A bounded time query, once @timestamp is verified as event time:
+
+```text
+host.name: "LAB-WIN11" and @timestamp >= "2026-10-19T13:00:00Z" and @timestamp <= "2026-10-19T15:00:00Z"
+```
+
+### Velociraptor: scoped EVTX and Prefetch
+
+**Artifact:** Windows.EventLogs.Evtx. Limit EvtxGlob, StartDate, EndDate, and IDRegex rather than parsing all logs/VSS.
+
+```sql
+SELECT * FROM Artifact.Windows.EventLogs.Evtx(
+  EvtxGlob='C:/Windows/System32/winevt/Logs/Microsoft-Windows-Sysmon%4Operational.evtx',
+  IDRegex='^1$',
+  StartDate='2026-10-19T13:00:00Z',
+  EndDate='2026-10-19T15:00:00Z')
+```
+
+Fallback execution evidence where Prefetch exists:
+
+```sql
+SELECT * FROM Artifact.Windows.Forensics.Prefetch(
+  binaryRegex='(?i)^suspect[.]exe$')
+```
+
+Read run times/count. Prefetch Hash/hashRegex is **not executable SHA-256**. Missing Prefetch is not proof of no execution. Amcache/Shimcache alone do not conclusively prove execution.
+
+### Arkime: first related communication
+
+```text
+ip.src == 192.0.2.10 && ip.dst == 198.51.100.20
+```
+
+Sort first-packet time and widen backward. Session time is not automatically malware execution time. Use packet/message timestamps where available.
+
+**Save:** earliest supported execution, parent, original timestamp/zone, timeline row, and coverage limits.
 
 ## 4. How did it arrive and run?
 
-Follow the parent/children in ELK. If raw Sysmon GUID fields exist:
+### ELK: parent/child chain and scripts
+
+Discovery lead where ECS parents exist (normal applications also match):
+
+```text
+host.name: "LAB-WIN11" and process.parent.name: (winword.exe or excel.exe or outlook.exe or explorer.exe)
+```
+
+Known Sysmon instance and its children, where raw GUID fields exist:
 
 ```text
 host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and (winlog.event_data.ProcessGuid: "REPLACE-GUID" or winlog.event_data.ParentProcessGuid: "REPLACE-GUID")
 ```
 
-Prefer process GUID/entity IDs over reused PIDs. Look before execution for file arrival/download, archive extraction, scripts, or remote logons; match supporting traffic in Arkime. Nearby times alone do not establish causation.
+PowerShell script blocks, if logging is enabled:
 
-**Save:** supported parent/arrival chain; mark missing links unknown.
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-PowerShell/Operational" and winlog.event_id: "4104"
+```
 
-## 5. What did the file do?
+Read complete commands/multipart scripts without executing them. Follow earlier file arrival, extraction, browser, service, or remote logon evidence. Do not assume phishing.
+
+### Velociraptor: live parent and direct children
+
+```sql
+SELECT Pid, Ppid, Name, Exe, CommandLine, Username, CreateTime,
+       { SELECT Pid, Name, Exe, CommandLine FROM pslist(pid=Ppid) } AS Parent
+FROM pslist(pid=4242)
+```
+
+```sql
+SELECT Pid, Ppid, Name, Exe, CommandLine, Username, CreateTime
+FROM pslist()
+WHERE Ppid = 4242
+```
+
+Live-only: exited parents and reused PIDs can mislead. Historical process GUIDs/start times establish the incident chain more reliably.
+
+### Arkime: arrival leads
+
+```text
+host.http == "example.com"
+```
+
+```text
+ip == 192.0.2.10 && http.uri == "*download*"
+```
+
+Match host, time, file identity, and process context. Nearby timestamps alone do not establish causation.
+
+**Save:** arrival evidence, parent/child instances, commands, and explicitly unknown links.
+
+## 5. What did it do?
 
 ![Static clues and observed lab behavior both need company evidence checks](sample-analysis.png)
 
-**Static — 3–5 minutes:**
+### Velociraptor: persistence artifacts
 
-1. Preserve a copy; record original path/type/SHA-256.
-2. For PE files, use PEStudio: strings, imports, signature, sections/packing clues. Use the provided matching tool for other formats.
-3. Share candidate domains, paths, commands, and persistence names. Check company evidence; strings/imports alone do not prove behavior. Check online lookup settings before external disclosure.
+Review each installed definition/parameters and run only what answers the next question. Each call is separate:
 
-**Dynamic — 5–8 minutes, in the provided isolated lab:**
+```sql
+SELECT * FROM Artifact.Windows.System.Services()
+```
 
-1. Confirm clean snapshot/reset point and approved network setup. Note lab host, clock, sample hash, and baseline.
-2. Start the provided sandbox/monitor logs and packet capture **before launch**. If supplied, Procmon tracks process/file/registry activity. Arkime sees the run only if lab traffic is captured.
-3. Follow the lab's launch procedure. Record command/user/start/end; watch children, dropped files, registry changes, tasks/services, DNS, and connections.
-4. Save logs/report, packet references, and dropped-file hashes before lab reset.
-5. Keep a separate **LAB RUN** record. Hunt those indicators in company evidence before claiming incident behavior.
+```sql
+SELECT * FROM Artifact.Windows.System.TaskScheduler()
+```
 
-No suitable lab/sample or no visible behavior? Record the limit and move on. Do not call the file benign or spend the hour forcing execution.
+```sql
+SELECT * FROM Artifact.Windows.Sys.StartupItems()
+```
 
-**Persistence in company evidence:** inspect service/task actions, startup/Run keys, WMI; Linux cron/systemd/SSH keys where relevant. Velociraptor artifacts to check in the installed catalog: Windows.System.Services, Windows.System.TaskScheduler, Windows.Network.Netstat. Review parameters/limits first.
+```sql
+SELECT * FROM Artifact.Windows.Persistence.PermanentWMIEvents()
+```
 
-ELK service/task events, if collected; run separately:
+Read actual executable/arguments/account, task XML/actions/principal/triggers, Run/startup targets, and WMI filters/consumers/bindings. WMI's artifact follows bindings and may omit unlinked components. Presence now, registration then, and successful execution are different claims.
+
+### ELK: files, registry, WMI, tasks, services
+
+File creation:
+
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: "11"
+```
+
+Registry and WMI subscription activity:
+
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: ("12" or "13" or "14" or "19" or "20" or "21")
+```
+
+Services installed:
 
 ```text
 host.name: "LAB-WIN11" and winlog.channel: "System" and winlog.event_id: "7045"
+```
+
+Tasks created/updated:
+
+```text
 host.name: "LAB-WIN11" and winlog.channel: "Security" and winlog.event_id: ("4698" or "4702")
 ```
 
-Legitimate installs match too. A registered task is not proof it ran.
+Security log cleared:
 
-**Save:** static clues + observed lab behavior + separately supported company behavior.
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Security" and winlog.event_id: "1102"
+```
+
+Narrow by candidate GUID/path/user/time. Normal software matches too. Preserve complete changed values/actions. Event IDs require their channel/provider context.
+
+### Static: 3–5 minutes
+
+1. Preserve the sample and record path/type/size/SHA-256.
+2. For PE files, use PEStudio: strings/imports/signature/sections/packing clues. Use the provided matching tool for other formats.
+3. Share candidate domains/paths/commands/persistence names. Strings/imports suggest capability, not observed behavior. Check lookup settings before disclosing samples/indicators externally.
+
+### Dynamic: 5–8 minutes, provided isolated lab
+
+1. Confirm clean snapshot/reset point and approved network setup. Record lab host/clock/sample hash/baseline.
+2. Start sandbox/monitor logs and packet capture **before launch**. If supplied, Procmon records process/file/registry changes. Arkime sees the run only if lab traffic is captured.
+3. Use the lab launch procedure. Record command/user/start/end; watch children, dropped files, registry/persistence, DNS, and connections.
+4. Save logs/report, packet references, and dropped-file hashes before lab reset.
+5. Keep a separate **LAB RUN** record; check indicators against company evidence. A short inactive test is not proof of benignness. No lab/sample? Record the limit and continue; do not build a sandbox during the hour.
+
+**Save:** static clues, observed lab behavior, and separately supported company behavior.
 
 ## 6. What did it contact?
 
-Arkime Sessions; run separately:
+### Velociraptor: current sockets and process
+
+**Artifact:** Windows.Network.Netstat.
+
+```sql
+SELECT * FROM Artifact.Windows.Network.Netstat()
+```
+
+Raw Windows sockets for one live process:
+
+```sql
+SELECT Pid, Status, Laddr, Raddr, Timestamp
+FROM netstat()
+WHERE Pid = 4242
+```
+
+Save local/remote tuple and collection time. Closed historical connections need historical events, not a live snapshot.
+
+### ELK: historical network and DNS
+
+```text
+host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: ("3" or "22")
+```
+
+Add the known ProcessGuid where present. Sysmon network events depend on configuration. ECS pivots where mapped:
+
+```text
+source.ip: "192.0.2.10" or destination.ip: "192.0.2.10"
+```
+
+```text
+destination.ip: "198.51.100.20" and destination.port: 443
+```
+
+```text
+dns.question.name: "example.com"
+```
+
+### Arkime: host, DNS, HTTP, TLS, volume
+
+All sessions and a specific connection:
 
 ```text
 ip == 192.0.2.10
-ip.src == 192.0.2.10 && ip.dst == 198.51.100.20
+```
+
+```text
+ip.src == 192.0.2.10 && ip.dst == 198.51.100.20 && port.dst == 443
+```
+
+DNS and candidate name:
+
+```text
 ip == 192.0.2.10 && protocols == dns
+```
+
+```text
 host.dns == "*example*"
 ```
 
-Open details. Record endpoints/ports, first/last times, session ID, and actual packet/message time where available. Check time bounding; overlap mode can include long sessions crossing the window. HTTPS can hide content. Match endpoint/log tuples and times before assigning a process.
+Visible HTTP host, URI, user-agent, and errors:
 
-**Save:** domain/IP/port + occurrence interval + session/packet evidence.
+```text
+host.http == "example.com"
+```
+
+```text
+http.uri == "*suspect.exe*"
+```
+
+```text
+http.user-agent == "*PowerShell*"
+```
+
+```text
+http.statuscode >= 400 && http.statuscode < 500
+```
+
+TLS sessions:
+
+```text
+ip == 192.0.2.10 && protocols == tls
+```
+
+Larger source-side transfers, illustrative 10 MB on-wire threshold:
+
+```text
+ip.src == 192.0.2.10 && bytes.src > 10000000
+```
+
+That threshold is triage, not an exfiltration rule; bytes.src includes overhead and source orientation needs checking. Periodic traffic can be legitimate monitoring. HTTPS can hide content.
+
+Open details; preserve sensor/session IDs, tuple, interval, packet/message times where available, and query/bounding mode. Overlap mode can include long sessions crossing the window. Account for NAT/proxies, DHCP changes, encryption, and capture gaps. DNS does not prove a later connection; Arkime alone generally cannot name the executable.
+
+**Save:** destination/domain/port, interval, process attribution if supported, packet/session evidence.
 
 ## 7. Was anyone else affected?
 
-ELK, only where hashes are indexed; run separately:
+### ELK: remove the host filter, keep the strong indicator
 
 ```text
-process.hash.sha256: "REPLACE-SHA256"
-file.hash.sha256: "REPLACE-SHA256"
+process.hash.sha256: "REPLACE-SHA256" or file.hash.sha256: "REPLACE-SHA256"
 ```
 
-Also check distinctive commands, persistence entries, and verified destinations. Review each host's context and execution evidence. No results may mean missing logs, wrong filters, or incomplete coverage.
+```text
+process.name: "suspect.exe"
+```
 
-**Save:** confirmed/suspicious hosts + supporting events + unassessed gaps.
+```text
+dns.question.name: "example.com" or destination.ip: "198.51.100.20"
+```
 
-## 8. Can we prove our answers?
+Names/shared IPs are weaker than exact hashes plus execution context. For possible lateral activity:
 
-Check each answer against saved evidence. Use [TIMELINE.md](TIMELINE.md) to order events, preserve time caveats, and keep lab results separate. Confirm the requested path/user/hash/time format before submitting.
+```text
+winlog.channel: "Security" and winlog.event_id: "4624" and source.ip: "192.0.2.10"
+```
 
-References: [KQL](https://www.elastic.co/docs/reference/query-languages/kql), [Arkime](https://github.com/arkime/arkime/blob/main/viewer/vueapp/src/components/help/Help.vue), [Velociraptor](https://docs.velociraptor.app/docs/), [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon), [PEStudio](https://www.winitor.com/), [Procmon](https://learn.microsoft.com/en-us/sysinternals/downloads/procmon). Extra tools are optional if provided, not installations to perform during the hour.
+Review target host, account/domain, logon type/session, and subsequent process evidence. Authentication alone does not prove lateral execution.
+
+### Velociraptor: bounded hash check on candidate clients
+
+Use indexed logs first. If needed, check a small likely directory on selected endpoints:
+
+```sql
+SELECT OSPath, hash(path=OSPath).SHA256 AS SHA256
+FROM glob(globs='C:/Users/*/Downloads/*.exe')
+WHERE NOT IsDir AND SHA256 = 'REPLACE-SHA256'
+```
+
+This checks direct .exe files in Downloads only—not recursively, other extensions, or the whole disk. Change scope to the case. Do not hash every disk by default. Record online/completed/failed clients; a match on disk is not execution proof.
+
+### Arkime: other sources and possible remote access
+
+```text
+ip.dst == 198.51.100.20
+```
+
+```text
+host.dns == "example.com"
+```
+
+Group by source IP in SPI views/graphs, then map each host at the time. Candidate remote-access sessions:
+
+```text
+ip.src == 192.0.2.10 && (port.dst == 445 || port.dst == 3389 || port.dst == 22)
+```
+
+Normal administration also matches. Ports alone do not prove login, execution, or compromise.
+
+**Save:** confirmed/suspicious hosts, each host's occurrence times, evidence, and coverage gaps.
+
+## 8. Can we prove the answers?
+
+Use [TIMELINE.md](TIMELINE.md). Save exact query/parameters, absolute bounds, source event/session/flow IDs, and preserved evidence locations. Keep original time/zone and distinguish occurrence, collection, ingestion, and lab-run times. Check export limits and errors.
+
+Minute 45: stop broad hunting. Minute 55: verify exact answers and submit.
+
+## Velociraptor artifact picker
+
+**Select client → New Collection → search artifact → review parameters → collect → check results/logs → save flow ID.** Do not collect everything. Start with Pslist + Netstat for live leads, then the one history/persistence collection needed next.
+
+- **Windows.System.Pslist:** process paths/users/commands and hash/signature enrichment. Narrow ProcessRegex/PidRegex/ExePathRegex/CommandLineRegex where available.
+- **Windows.Sys.Users:** registry profile evidence; not a specific logon event or proof of execution.
+- **Windows.Network.Netstat:** live sockets and owning process name/PID.
+- **Windows.EventLogs.Evtx:** historical events. Scope EvtxGlob, StartDate, EndDate, IDRegex; avoid all-log/VSS sweeps by default.
+- **Windows.Forensics.Prefetch:** execution clues/run times where present. binaryRegex filters executable names; dateAfter/dateBefore limit times. Prefetch hash is not file SHA-256.
+- **Windows.System.Services:** executable/account/configuration. Optional Calculate_hashes and CertificateInfo add work; target candidates.
+- **Windows.System.TaskScheduler:** task definitions/actions/user context. Review AlsoUpload for original XML; avoid unrelated command-binary uploads by default.
+- **Windows.Sys.StartupItems:** Run keys and startup-folder targets/arguments.
+- **Windows.Persistence.PermanentWMIEvents:** linked filters/consumers/bindings; unlinked components may need separate investigation.
+- **Windows.System.Amcache:** historical program/file clues; presence alone does not prove execution.
+- **Windows.Registry.AppCompatCache:** compatibility-cache clues; presence alone does not prove execution.
+
+Missing artifact? Search the installed catalog by purpose, read its definition, and choose the equivalent. Do not guess parameters or install an entire community pack mid-event.
+
+## No results / query errors
+
+Check host/OS/client context, data view, absolute time/timezone, language, actual fields/artifacts, enabled logging, endpoint errors/online state, retention, encryption, NAT, and capture coverage. Test with a known matching event. A valid query returning zero rows is not a detection test.
+
+## Official references
+
+Documentation reviewed 2026-10-20 UTC. Installed versions were not supplied; no endpoint queries or searches have been executed against the event.
+
+- [VQL fundamentals](https://docs.velociraptor.app/docs/vql/fundamentals/), [pslist](https://docs.velociraptor.app/vql_reference/popular/pslist/), [glob](https://docs.velociraptor.app/vql_reference/popular/glob/), [authenticode](https://docs.velociraptor.app/vql_reference/windows/authenticode/)
+- [Pslist artifact](https://docs.velociraptor.app/artifact_references/pages/windows.system.pslist/), [users](https://docs.velociraptor.app/artifact_references/pages/windows.sys.users/), [Netstat](https://docs.velociraptor.app/artifact_references/pages/windows.network.netstat/)
+- [EVTX artifact](https://docs.velociraptor.app/artifact_references/pages/windows.eventlogs.evtx/), [Prefetch](https://docs.velociraptor.app/artifact_references/pages/windows.forensics.prefetch/), [execution evidence](https://docs.velociraptor.app/docs/forensic/evidence_of_execution/)
+- [Services](https://docs.velociraptor.app/artifact_references/pages/windows.system.services/), [tasks](https://docs.velociraptor.app/artifact_references/pages/windows.system.taskscheduler/), [startup](https://docs.velociraptor.app/artifact_references/pages/windows.sys.startupitems/), [WMI](https://docs.velociraptor.app/artifact_references/pages/windows.persistence.permanentwmievents/)
+- [Arkime help](https://github.com/arkime/arkime/blob/main/viewer/vueapp/src/components/help/Help.vue), [Malcolm comparison](https://malcolm.fyi/docs/queries-cheat-sheet.html), [HTTP field definitions](https://github.com/arkime/arkime/blob/main/capture/parsers/http.c)
+- [KQL](https://www.elastic.co/docs/reference/query-languages/kql), [Winlogbeat fields](https://www.elastic.co/docs/reference/beats/winlogbeat/exported-fields-winlog), [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon), [PEStudio](https://www.winitor.com/), [Procmon](https://learn.microsoft.com/en-us/sysinternals/downloads/procmon)
