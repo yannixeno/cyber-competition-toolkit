@@ -1,76 +1,61 @@
-# Quick searches: pick the question you need answered
+# Quick sheet: find, inspect, test
 
-[60-minute plan](README.md) · [Timeline](TIMELINE.md)
+[Plan](README.md) · [Timeline](TIMELINE.md)
 
-Set the incident's **absolute time window** first. Replace example hosts/IPs/values. These examples are not tested against the event; check actual fields. No results may mean missing data or the wrong filter.
+Set the incident's **absolute time window** first. Replace sample hostnames/IPs. Check actual fields; these examples have not been tested in the competition. Empty results can mean missing data or wrong filters.
 
-## ELK: what happened on this host?
+## 1. ELK: what happened and when?
 
-Run in **Kibana Discover with KQL selected**. Start with the host, inspect a record, then narrow.
+Use **Kibana Discover → KQL**. Start with the host:
 
 ```text
 host.name: "LAB-WIN11"
 ```
 
-Sort oldest first. Look at time, user, executable, command line, parent/process ID or GUID, and source event ID. Save the raw event reference with useful findings.
+Sort oldest first. Read the timestamp, user, path, command line, parent, process identifier, and source event ID.
 
-### What ran?
-
-Requires collected Sysmon process events:
+**What ran?** Requires collected Sysmon events:
 
 ```text
 host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and winlog.event_id: "1"
 ```
 
-Find the suspicious process, then follow its parent and children. Prefer a process GUID/entity ID; PIDs get reused. If only Security auditing is available, look for channel Security / event 4688 instead.
+Follow the process's parent and children. Prefer GUID/entity IDs; PIDs get reused. If only Security auditing exists, check Security / 4688 instead.
 
-### What did that process do next?
-
-If the raw Sysmon GUID fields are present:
+**What did this process do?** If raw Sysmon GUID fields exist:
 
 ```text
 host.name: "LAB-WIN11" and winlog.channel: "Microsoft-Windows-Sysmon/Operational" and (winlog.event_data.ProcessGuid: "REPLACE-GUID" or winlog.event_data.ParentProcessGuid: "REPLACE-GUID")
 ```
 
-Inspect the event type and details: network, DNS, files, children, or registry activity. Field mappings and sensor settings vary.
+Look for file/registry changes, DNS, connections, and children. Fields depend on the pipeline and enabled logs.
 
-### Was persistence installed?
-
-Service installation:
+**New service or task?** Run separately:
 
 ```text
 host.name: "LAB-WIN11" and winlog.channel: "System" and winlog.event_id: "7045"
-```
-
-Task creation/update:
-
-```text
 host.name: "LAB-WIN11" and winlog.channel: "Security" and winlog.event_id: ("4698" or "4702")
 ```
 
-Check the actual service path or task action. Legitimate installs match too. Registration does not prove execution.
+Inspect the service path/task action. Legitimate installs match too; registration is not execution.
 
-### Where else did this hash appear?
-
-Only works if hashes were indexed. Run separately as needed:
+**Same sample elsewhere?** Only works where hashes are indexed:
 
 ```text
 process.hash.sha256: "REPLACE-SHA256"
 file.hash.sha256: "REPLACE-SHA256"
 ```
 
-Check host/time/context for every match. Same bytes under another name do not prove execution.
+## 2. Velociraptor: what is on the host?
 
-## Velociraptor: what is on the host?
+Select the correct client; check OS/last seen. Review existing results, then collect only what answers your question.
 
-Select the right client; check hostname/OS/last seen. Start with existing results, then collect only what answers your question.
+- **Process:** full path, command line, parent, user, start time, connections.
+- **File:** acquire a copy; record original path, SHA-256, and collection ID.
+- **Persistence:** inspect service/task actions, startup/Run keys, and WMI; Linux cron/systemd/SSH keys where relevant.
+- **History:** collect relevant logs if ELK lacks them. A live snapshot is not process history.
 
-- **Running now:** processes, full paths, command lines, parents, start times, and connections.
-- **Suspicious file:** acquire a copy, record original path and SHA-256. Preserve collection/flow ID.
-- **Restarts itself:** check services, task actions, startup/Run keys, and WMI subscriptions; on Linux, cron/systemd/SSH keys where relevant.
-- **Past activity:** collect relevant event logs and execution artifacts if ELK lacks history. Current state alone cannot establish historical creation/execution times.
-
-Artifact names to check in the installed catalog: Windows.Network.Netstat, Windows.System.Services, Windows.System.TaskScheduler. Review parameters/limits on one host before expanding.
+Check installed artifacts: Windows.Network.Netstat, Windows.System.Services, Windows.System.TaskScheduler. Review parameters/limits and test on one host first.
 
 Minimal VQL in an **endpoint** query context:
 
@@ -78,36 +63,41 @@ Minimal VQL in an **endpoint** query context:
 SELECT * FROM pslist()
 ```
 
-This shows live processes, not history. The server context can inspect the server instead of the victim.
+This shows processes now. Server context may inspect the server instead of the victim.
 
-## Arkime: what did the host contact?
+## 3. Arkime: what did it contact?
 
-Run in **Arkime Sessions**, not Kibana.
-
-All sessions involving the host:
+Use **Arkime Sessions**. Run separately:
 
 ```text
 ip == 192.0.2.10
-```
-
-Traffic to a candidate destination:
-
-```text
 ip.src == 192.0.2.10 && ip.dst == 198.51.100.20
-```
-
-DNS and visible HTTP:
-
-```text
 ip == 192.0.2.10 && protocols == dns
-ip == 192.0.2.10 && protocols == http
 host.dns == "*example*"
 ```
 
-Open session details. Record endpoints, first/last times, session ID, and actual packet/message time if available. Match the tuple/time to endpoint logs before assigning a process. HTTPS can hide URLs/content. Check historical host-IP mapping and time-bounding mode; use overlap mode if available to include long sessions crossing your window.
+Open session details. Save session ID, endpoints/ports, first/last time, and packet/message time where available. Check host-IP mapping and time-bounding; overlap mode can include long sessions crossing the window. HTTPS can hide content. Match endpoint evidence before naming the responsible process.
 
-## One finding = one next check
+## 4. Static and dynamic analysis
 
-Example: **ELK found a process start → endpoint checks its path/hash → Arkime checks related traffic → lead adds evidence-backed timeline rows.**
+![Static analysis produces leads; dynamic analysis observes a controlled lab run; both feed company evidence checks](sample-analysis.png)
 
-For fields/event meanings, use the tools' built-in help and the official references linked in the older tool guides. Do not open all the old documents during the sprint.
+**Static — 3–5 minutes. Inspect without running.**
+
+1. Record original path, file type, size, and SHA-256. Preserve a copy.
+2. For PE files, use PEStudio: signature, strings, imports, sections/packing clues. Use the provided matching tool for scripts/other formats.
+3. Share candidate domains, paths, commands, and persistence names immediately. Strings/imports alone do not prove behavior. Check online lookup settings before disclosing samples/indicators externally.
+
+**Dynamic — 5–8 minutes. Observe a controlled run.**
+
+1. Use the provided isolated VM/sandbox, clean snapshot/reset point, and approved network setup. Record lab host, clock, sample hash, and baseline.
+2. Start recording **before** launch: sandbox telemetry or provided process/file/registry monitor and packet capture. If supplied, Procmon helps track processes and file/registry changes. Arkime only sees lab traffic if that traffic is captured.
+3. Follow the lab's launch procedure. Note command/user/start/end. Watch child processes, dropped files, persistence, DNS, and connections.
+4. Save logs/report, packet evidence, and dropped-file hashes before resetting through the lab procedure.
+5. Label results **LAB RUN**. Hunt the observed indicators in company evidence. Never insert lab timestamps as the company's original activity.
+
+No lab, no sample, or no visible behavior? Record the limitation and move on. No behavior does not mean benign. Do not spend the hour building a sandbox or forcing execution.
+
+**Handoff:** sample hash → clues → observed lab behavior → matching company evidence.
+
+References: [KQL](https://www.elastic.co/docs/reference/query-languages/kql), [Arkime help](https://github.com/arkime/arkime/blob/main/viewer/vueapp/src/components/help/Help.vue), [Velociraptor](https://docs.velociraptor.app/docs/), [Sysmon](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon), [PEStudio](https://www.winitor.com/), [Procmon](https://learn.microsoft.com/en-us/sysinternals/downloads/procmon). Extra tools are optional if provided, not installations to perform during the hour.

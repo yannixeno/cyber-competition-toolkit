@@ -1,8 +1,10 @@
-# One shared timeline
+# Build the story as you investigate
 
-[60-minute plan](README.md) · [Quick searches](QUERIES.md)
+[Plan](README.md) · [Quick sheet](QUERIES.md)
 
-Start immediately. Pick one person to merge/review rows. Everyone contributes findings with evidence as they investigate. Keep raw exports in the event-approved evidence location.
+One person merges/reviews. Everyone contributes facts and evidence throughout the hour.
+
+![Illustrative timeline: arrival, execution, persistence, and traffic need their own evidence](timeline-example.png)
 
 ## Copy these five columns
 
@@ -10,37 +12,27 @@ Start immediately. Pick one person to merge/review rows. Everyone contributes fi
 |---|---|---|---|---|
 | | | | | |
 
-**Evidence:** record the tool, event/session/collection ID, saved export, and exact record/packet location. A screenshot can help, but keep the underlying record where available.
+- **Time:** full date/time, such as 2026-10-19T14:00:05Z. Keep start/end for intervals.
+- **Evidence:** tool + event/session/collection ID + saved export and exact record/packet location.
+- **Notes:** original time/timezone, relevant user/path/hash/process, uncertainty, and next check.
 
-**Notes:** original timestamp/timezone, important path/hash/user/process ID, uncertainty, or the next check. If timezone/clock is unknown, leave UTC unresolved and retain the raw time here. Do not pretend a local timestamp is UTC.
+If the timezone or clock is unknown, retain the raw time and mark UTC unresolved. Do not invent precision. Keep raw evidence unchanged in the approved workspace.
 
-## Invented example — not competition findings
+## Keep two records
 
-| Time (UTC) | Host | What happened | Evidence | Notes |
-|---|---|---|---|---|
-| 14:00:05 | HOST-A | Candidate executable started | ELK: saved process event E-01 | Full date: 2026-10-19; original time had Z; record path, parent GUID and hash |
-| 14:00:08 | HOST-A | Task registered referencing that path | ELK: saved task event E-02 | Registration observed; task execution not confirmed |
-| 14:00:10–14:00:12 | HOST-A | Outbound connection observed | Arkime: session E-03 | Destination/ports recorded; purpose and process attribution not yet confirmed |
+**COMPANY INCIDENT:** activity supported by the company logs, endpoints, and traffic.
 
-Use **full dates and times** in real rows: 2026-10-19T14:00:05Z. Use start/end times for intervals.
-
-## Write facts in plain language
-
-Good: “Process started from this path under this user.”
-
-Too strong without more evidence: “The attacker stole credentials.”
-
-Strings/imports in PEStudio suggest things to check; they are not company events. Keep sample-analysis notes separately and add only observed incident activity to this timeline. Label investigator/response actions clearly if included.
+**LAB RUN:** use a separate copy of the same template for dynamic-analysis results. Record lab host, sample hash, run times, conditions, and evidence. Lab behavior guides the company hunt; it does not prove the company experienced that behavior.
 
 ## Before submitting
 
-- Sort by occurrence time, not collection/ingestion time.
-- Check timezone/clock differences; mark uncertain ordering.
-- Merge duplicate copies of the same original event; keep both references.
-- Connect events using process identity, file hash, or network tuple/time—not nearby timestamps alone.
-- Say “earliest observed” when earlier history is missing.
-- Match each important claim to evidence. Mark unknowns.
+- Sort by occurrence time—not collection or ingestion time.
+- Check clock/timezone differences. Mark uncertain order.
+- Merge duplicate copies of the same original event; retain references.
+- Connect events using process identity, hash, or network tuple/time. Nearby times alone do not prove a chain.
+- Write facts: “Task registered” does not mean “Task ran.”
+- Say “earliest observed” if earlier history is missing. Mark unknowns and investigator actions clearly.
 
-**At minute 45:** stop broad hunting and finish the story. **At minute 55:** verify answers and submit.
+**Minute 45: finish the story. Minute 55: verify and submit.**
 
-This five-column format replaces the earlier large timeline schema for the one-hour event. Keep extra source detail in exports and notes rather than adding more required columns.
+The picture is a fictional teaching example, not competition evidence. Real events may be missing, occur in another order, or remain unconfirmed.

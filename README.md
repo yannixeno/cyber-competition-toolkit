@@ -1,62 +1,44 @@
-# Find the malware. Build the timeline. 60 minutes.
+# Malware investigation: 60 minutes
 
-**Scenario:** A simulated company has unidentified malware. Your job is to explain what happened using Arkime, Velociraptor, and ELK.
+**Find the malware, explain what happened, and build a timeline with evidence.**
 
-**Use just three files:** this plan, [QUERIES.md](QUERIES.md), and [TIMELINE.md](TIMELINE.md). The older documents are optional reference; you do not need to read them during the hour.
+Use [QUERIES.md](QUERIES.md) for searches and sample analysis. Fill in [TIMELINE.md](TIMELINE.md) as you work.
 
-## Split the work
+![The one-hour plan, including parallel static and dynamic analysis](60-minute-plan.png)
 
-- **ELK:** find when things happened and what launched what.
-- **Velociraptor:** check the affected host, processes, files, and persistence.
-- **Arkime:** find related DNS, connections, and transfers.
-- **Lead:** keep the timeline, assign the next checks, and submit. Combine roles for a smaller team.
+## Who does what?
 
-Everyone shares: **host + time + finding + evidence + next check**. Add findings as you go. Do not save timeline writing for the end.
+- **ELK analyst:** find past activity—what ran, when, and what launched it.
+- **Endpoint analyst:** use Velociraptor to check processes, files, hashes, and persistence.
+- **Network analyst:** use Arkime to check DNS, connections, and transfers.
+- **Sample analyst:** inspect the sample, then observe a controlled run in the provided analysis lab.
+- **Lead:** maintain the timeline and submit answers. Combine roles to fit your team.
 
-## 0–5 minutes: get oriented
+Share **host + time + finding + evidence + next check**. Work in parallel; nobody waits for the whole team to finish a tool.
 
-Read the briefing and questions. Note the supplied host, user, IP, file, or time. Confirm scope, timezone, available logs, and whether changes are allowed. Start the shared timeline and open the three tools.
+## Follow the clock
 
-## 5–20 minutes: get one solid lead
+**0–5: Get ready.** Read the briefing/questions. Check scope, timezone, log coverage, allowed actions, and the provided analysis lab. Start the shared timeline.
 
-Start with the supplied clue. If none is given:
+**5–20: Find a lead.** Start with the supplied clue. Without one, check unusual processes/commands, new tasks/services, and unusual traffic. Share your best lead by minute 15. Check filters or switch leads if stuck.
 
-- ELK: check process activity around the reported incident. Look for unusual parents/commands or new services/tasks.
-- Arkime: look for a company host with unusual destinations, downloads, or repeated connections.
-- Velociraptor: inspect the strongest candidate host's processes and connections; get the full path, command line, and hash of a suspicious file.
+**20–35: Trace and analyze.** Follow the suspicious file/process backward to arrival and execution, then forward to children, persistence, and connections. At the same time, one analyst does **3–5 minutes of static analysis**, then **5–8 minutes of dynamic observation** in the lab. Start sooner if the sample is ready. Follow the short checklist in QUERIES.md.
 
-**By minute 15, share your strongest lead.** If stuck, check time filters and missing data, then switch to another lead. Do not spend the whole hour in one search.
+**35–45: Check other hosts.** Search confirmed hashes, distinctive commands/paths, persistence entries, and verified destinations. Check the context of every match.
 
-## 20–35 minutes: trace backward and forward
+**45–55: Finish the timeline.** Stop broad hunting. Order the evidence, check the important claims, and mark unknowns. Lab results stay separate from company events.
 
-For the suspicious process/file, answer:
+**55–60: Verify and submit.** Check exact paths, users, timestamps, hashes, evidence, and submission receipts.
 
-1. How did it arrive, if the evidence shows that?
-2. When did it run, what launched it, and under which user?
-3. What did it create or change? What lets it restart?
-4. What did it contact afterward?
+## What should your story explain?
 
-Use ELK for history, Velociraptor for host evidence, and Arkime for traffic. Preserve relevant exports/sample hashes. If PEStudio is provided, quickly check the preserved sample for useful strings/imports and test those leads in the other tools. Do not get stuck chasing a malware-family name or executing the sample.
+**Arrival, if known → execution → changes/persistence → communications → other affected hosts → impact.** Leave unsupported stages unknown.
 
-## 35–45 minutes: check the rest of the company
+## Four rules to remember
 
-Search other hosts for the confirmed hash, distinctive command/path, persistence entry, and verified destination. Check each match's context. Add affected hosts and their own event times to the timeline. Record coverage gaps.
+1. Keep evidence and add findings as you go. Collection time is not execution time.
+2. Static clues suggest behavior; dynamic tests show lab behavior. Confirm both against company evidence.
+3. Run samples only in the designated isolated analysis lab using its procedure. If unavailable, document the limit and continue investigating.
+4. A suspicious connection is not automatically C2; a large transfer is not automatically theft.
 
-## 45–55 minutes: finish the story
-
-Stop broad hunting. Sort the timeline in UTC, remove duplicate copies of the same event, and check the evidence for each important claim. Resolve only gaps that change an answer. Mark unknowns clearly.
-
-## 55–60 minutes: verify and submit
-
-One teammate checks the exact answers against evidence; another submits. Check timestamp format, full paths, usernames, hash algorithm, and submission receipts.
-
-**Final story:** earliest observed activity → arrival if known → execution → changes/persistence → communications → other affected hosts → impact and unknowns. Include only stages supported by evidence.
-
-## Keep these distinctions straight
-
-- Collection time is not execution time. Keep original timestamps; convert to UTC only when the timezone is known.
-- A suspicious connection is not automatically C2. A large upload is not automatically data theft.
-- A task present now does not prove when it was created or that it ran.
-- Preserve evidence. Change systems only when the scenario allows/requires it; record any actions.
-
-Query examples need local field/version checks. This is a practical sprint plan, not verified competition rules or a prediction of the malware.
+This guide matches the team's supplied scenario. Tool versions, competition rules, and runtime queries have not been verified. Pictures are instructional diagrams, not screenshots or actual findings. Store live evidence/samples in the event-approved location, outside this repo unless allowed.
